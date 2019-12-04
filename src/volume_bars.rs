@@ -20,10 +20,7 @@ impl VolumeBars {
             }
         }
 
-        VolumeBars {
-            bars: bars,
-            threshold
-        }
+        VolumeBars { bars, threshold }
     }
 
 }

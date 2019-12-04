@@ -14,6 +14,7 @@ use volume_bars::VolumeBars;
 use dollar_bars::DollarBars;
 use tick_imbalance_bars::TickImbalanceBars;
 
+
 pub struct Config<'a> {
     pub input: &'a str,
     pub output: &'a str,
@@ -57,18 +58,22 @@ trait BarGenerator {
 }
 
 impl Bar {
+    /// Returns a new bar based on the first trade
     fn new(trade: &Trade) -> Bar {
         Bar {
             timestamp: trade.timestamp,
             open: trade.price,
             high: trade.price,
-            low: trade.price, close: trade.price, volume: trade.amount,
+            low: trade.price,
+            close: trade.price,
+            volume: trade.amount,
             dollar_volume: trade.amount * trade.price,
             count: 1,
             last_timestamp: trade.timestamp,
         }
     }
 
+    /// Registers a tick (trade) into the bar
     fn next(&mut self, trade: &Trade) {
         if self.high < trade.price {
             self.high = trade.price;
@@ -103,11 +108,13 @@ impl Trade {
 }
 
 impl CsvTradesFile {
-    fn new(filename: &str) -> CsvTradesFile {
-        let file = File::open(filename).unwrap();
-        CsvTradesFile { file }
+    /// Returns new CsvTradesFile given a filename
+    fn new(filename: &str) -> io::Result<CsvTradesFile> {
+        let file = File::open(filename)?;
+        Ok(CsvTradesFile { file })
     }
 
+    /// Reads contents of CSV and returns Iterator
     fn read(self) -> impl Iterator<Item = Trade> {
         let buf_reader = io::BufReader::new(self.file);
         let reader = csv::ReaderBuilder::new()
@@ -120,17 +127,20 @@ impl CsvTradesFile {
 }
 
 
-fn save(bars: Vec<Bar>, filename: &str) -> Result<(), io::Error> {
+fn save(bars: Vec<Bar>, filename: &str) -> io::Result<()> {
     let mut csv_writer = csv::Writer::from_path(filename)?;
-
     for bar in bars {
         csv_writer.serialize(bar)?;
     }
     Ok(())
 }
 
-pub fn run(config: Config) -> Result<(), &'static str> {
-    let trades = CsvTradesFile::new(config.input).read();
+pub fn run(config: Config) -> Result<(), String> {
+    let trades_file = CsvTradesFile::new(config.input);
+    if let Err(_) = trades_file {
+        return Err(format!("Unable to open file {}", config.input))
+    }
+    let trades = trades_file.unwrap().read();
     let bars = match config.method {
         "dollar" => DollarBars::new(trades, 500000.0).bars,
         "volume" => VolumeBars::new(trades, 500.0).bars,
@@ -140,7 +150,7 @@ pub fn run(config: Config) -> Result<(), &'static str> {
             tib.bars
         },
         _ => {
-            return Err("invalid sampling method");
+            return Err("invalid sampling method".to_string());
         }
     };
 
@@ -149,3 +159,53 @@ pub fn run(config: Config) -> Result<(), &'static str> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_initializes_properly() {
+        let trade = Trade{
+            timestamp: 1546016874,
+            price: 3800.0,
+            amount: 0.25
+        };
+        let bar = Bar::new(&trade);
+
+        assert_eq!(trade.timestamp, bar.timestamp);
+        assert_eq!(trade.timestamp, bar.last_timestamp);
+        assert_eq!(trade.price, bar.open);
+        assert_eq!(trade.price, bar.high);
+        assert_eq!(trade.price, bar.low);
+        assert_eq!(trade.price, bar.close);
+        assert_eq!(trade.amount, bar.volume);
+        assert_eq!(950.0, bar.dollar_volume);
+        assert_eq!(1, bar.count);
+    }
+
+
+    #[test]
+    fn bar_updates_new_high() {
+        let trade1 = Trade{
+            timestamp: 1546016874,
+            price: 3800.0,
+            amount: 0.25
+        };
+        let trade2 = Trade{
+            timestamp: 1546016875,
+            price: 3805.0,
+            amount: 0.50
+        };
+        let mut bar = Bar::new(&trade1);
+        bar.next(&trade2);
+
+        assert_eq!(trade1.timestamp, bar.timestamp);
+        assert_eq!(trade2.timestamp, bar.last_timestamp);
+        assert_eq!(trade1.price, bar.open);
+        assert_eq!(trade2.price, bar.high);
+        assert_eq!(trade1.price, bar.low);
+        assert_eq!(trade2.price, bar.close);
+        assert_eq!(trade1.amount + trade2.amount, bar.volume);
+        assert_eq!(2, bar.count);
+    }
+}
